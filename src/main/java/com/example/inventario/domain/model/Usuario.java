@@ -1,7 +1,7 @@
 package com.example.inventario.domain.model;
 
 public abstract class Usuario{
-    private int id;
+    public int id;
     private String nombre;
     private String correo;
     private String contraseña;
@@ -30,7 +30,7 @@ public abstract class Usuario{
     }
     
     public boolean iniciarSesion(String correo, String contraseña){
-        if (this.correo == correo && this.contraseña == contraseña){
+        if (this.correo.equals(correo) && this.contraseña.equals(contraseña)){
             activo = true;
             return true;
         } else {
