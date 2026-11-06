@@ -12,7 +12,8 @@ public interface CrearEmpleadoUseCase {
             String nombre,
             String correo,
             String Contraseña,
-            Rol rol
+            Rol rol,
+            String cargo
 
     ){}
 }

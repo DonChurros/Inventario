@@ -20,7 +20,8 @@ public class EmpleadoService implements CrearEmpleadoUseCase {
                 command.nombre(),
                 command.correo(),
                 command.Contraseña(),
-                command.rol());
+                command.rol(),
+                command.cargo());
         return empleadoRepositoryPort.save(empleado);
     }
 }

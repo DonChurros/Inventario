@@ -1,7 +1,9 @@
 plugins {
 	id 'java'
-	id 'org.springframework.boot' version '4.1.2'
+	id 'org.springframework.boot' version '4.1.1'
 	id 'io.spring.dependency-management' version '1.1.7'
+	id 'org.sonarqube' version '6.2.0.5505'
+	id 'info.solidsoft.pitest' version '1.19.0'
 }
 
 group = 'com.example'
@@ -17,16 +19,54 @@ repositories {
 	mavenCentral()
 }
 
+//testImplementation platform('org.junit:junit-bom:5.10.0')
+//testImplementation 'org.junit.jupiter:junit-jupiter'
+////testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 dependencies {
-	implementation 'org.springframework.boot:spring-boot-h2console'
 	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
 	implementation 'org.springframework.boot:spring-boot-starter-webmvc'
-	runtimeOnly 'com.h2database:h2'
+	runtimeOnly 'com.microsoft.sqlserver:mssql-jdbc'
 	testImplementation 'org.springframework.boot:spring-boot-starter-data-jpa-test'
 	testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+	testRuntimeOnly 'com.h2database:h2'
+	testImplementation 'org.springframework.boot:spring-boot-starter-test'
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
-tasks.named('test') {
+test {
 	useJUnitPlatform()
+}
+
+tasks.named('bootRun') {
+	jvmArgs "-Djava.library.path=${file('drivers').absolutePath}"
+}
+
+repositories {
+	mavenCentral()
+}
+
+sonar {
+	properties {
+		property 'sonar.projectKey', 'untitled1'
+		property 'sonar.projectName', 'Proyecto Demo Calidad'
+		property 'sonar.host.url', 'http://localhost:9000&#39';
+
+		// Mejor usar variable de entorno y no guardar el token aquí
+		property 'sonar.token', System.getenv('SONAR_TOKEN')
+	}
+}
+
+pitest {
+	pitestVersion = '1.19.0'
+	junit5PluginVersion = '1.2.1'
+
+	targetClasses = ['com.example.inventario.*']
+	targetTests = ['com.example.inventario.*']
+
+	threads = 4
+	outputFormats = ['HTML']
+	timestampedReports = false
+
+	verbose = true
 }

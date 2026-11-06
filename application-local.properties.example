@@ -1,0 +1,3 @@
+# Conexion basada en la instancia AMD-GIGABYTE-1T\SQLEXPRESS con autenticacion Windows.
+# La base Inventario debe existir; cambia databaseName si tu base tiene otro nombre.
+spring.datasource.url=jdbc:sqlserver://AMD-GIGABYTE-1T;instanceName=SQLEXPRESS;databaseName=Inventario;integratedSecurity=true;encrypt=true;trustServerCertificate=true
