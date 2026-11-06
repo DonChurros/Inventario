@@ -26,6 +26,12 @@ out/
 desktop/node_modules/
 desktop/dist/
 /application-local.properties
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.template
+**/application-local.properties
+**/application-*.local.properties
 /drivers/*.dll
 !**/src/main/**/out/
 !**/src/test/**/out/
