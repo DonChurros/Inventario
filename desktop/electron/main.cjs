@@ -2,10 +2,16 @@ const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('node:path');
 
 const apiBaseUrl = (process.env.INVENTARIO_API_URL || 'http://localhost:8080').replace(/\/+$/, '');
+let sessionToken = null;
 
 async function requestApi(path, options) {
+  const headers = new Headers(options && options.headers ? options.headers : {});
+  if (sessionToken) {
+    headers.set('Authorization', `Bearer ${sessionToken}`);
+  }
   const response = await fetch(`${apiBaseUrl}${path}`, {
     ...options,
+    headers,
     signal: AbortSignal.timeout(10000),
   });
   const responseBody = await response.text();
@@ -23,6 +29,37 @@ async function requestApi(path, options) {
 
   return responseBody ? JSON.parse(responseBody) : null;
 }
+
+ipcMain.handle('auth:login', async (_event, credentials) => {
+  const response = await requestApi('/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(credentials),
+  });
+  sessionToken = response.token;
+  return response.empleado;
+});
+
+ipcMain.handle('auth:logout', async () => {
+  try {
+    if (sessionToken) {
+      await requestApi('/auth/logout', { method: 'POST' });
+    }
+  } finally {
+    sessionToken = null;
+  }
+});
+
+ipcMain.handle('auth:change-password', (_event, cambio) => {
+  if (!cambio || typeof cambio !== 'object') {
+    throw new Error('Completa los datos de cambio de contraseña.');
+  }
+  return requestApi('/auth/contrasena', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(cambio),
+  });
+});
 
 function createWindow() {
   const window = new BrowserWindow({
@@ -49,7 +86,17 @@ function createWindow() {
 
 ipcMain.handle('productos:listar', () => requestApi('/productos'));
 
+ipcMain.handle('reportes:rentabilidad', () => requestApi('/reportes/rentabilidad'));
+
 ipcMain.handle('productos:opciones', () => requestApi('/productos/opciones'));
+
+ipcMain.handle('productos:variantes', (_event, productoId) => {
+  const id = Number(productoId);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new Error('Selecciona un producto válido.');
+  }
+  return requestApi(`/productos/${id}/variantes`);
+});
 
 ipcMain.handle('productos:crear', (_event, producto) => requestApi('/productos', {
     method: 'POST',
@@ -102,6 +149,24 @@ ipcMain.handle('administracion:crear', (_event, recurso, registro) => {
   });
 });
 
+ipcMain.handle('productos:eliminar-existencias', (_event, productoId) => {
+  const id = Number(productoId);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new Error('Selecciona un producto válido.');
+  }
+  return requestApi(`/productos/${id}/existencias`, { method: 'DELETE' });
+});
+
+ipcMain.handle('ventas:registrar', (_event, pedidoId) => {
+  const id = Number(pedidoId);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new Error('Selecciona una venta válida.');
+  }
+  return requestApi(`/ventas/${id}/registrar`, {
+    method: 'POST',
+  });
+});
+
 ipcMain.handle('categorias:actualizar-estado', (_event, categoriaId, estado) => {
   const id = Number(categoriaId);
   if (!Number.isInteger(id) || id <= 0 || !['Activo', 'Inactivo'].includes(estado)) {
@@ -111,6 +176,39 @@ ipcMain.handle('categorias:actualizar-estado', (_event, categoriaId, estado) => 
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ estado }),
+  });
+});
+
+ipcMain.handle('empleados:actualizar-rol', (_event, empleadoId, rolId) => {
+  const id = Number(empleadoId);
+  const roleId = Number(rolId);
+  if (!Number.isInteger(id) || id <= 0 || !Number.isInteger(roleId) || roleId <= 0) {
+    throw new Error('Selecciona un empleado y un rol válidos.');
+  }
+  return requestApi(`/empleados/${id}/rol`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rolId: roleId }),
+  });
+});
+
+ipcMain.handle('empleados:retirar', (_event, empleadoId) => {
+  const id = Number(empleadoId);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new Error('Selecciona un empleado válido.');
+  }
+  return requestApi(`/empleados/${id}/estado`, { method: 'PUT' });
+});
+
+ipcMain.handle('empleados:actualizar-contrasena', (_event, empleadoId, contrasena) => {
+  const id = Number(empleadoId);
+  if (!Number.isInteger(id) || id <= 0 || typeof contrasena !== 'string' || contrasena.length < 8) {
+    throw new Error('La contraseña debe tener al menos 8 caracteres.');
+  }
+  return requestApi(`/empleados/${id}/contrasena`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ contrasena }),
   });
 });
 

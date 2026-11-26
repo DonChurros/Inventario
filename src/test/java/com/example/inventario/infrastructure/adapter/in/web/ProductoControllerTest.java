@@ -6,8 +6,11 @@ import com.example.inventario.infrastructure.adapter.out.persistence.CategoriaEn
 import com.example.inventario.infrastructure.adapter.out.persistence.ColorEntity;
 import com.example.inventario.infrastructure.adapter.out.persistence.CredencialUsuarioEntity;
 import com.example.inventario.infrastructure.adapter.out.persistence.DocumentoEntity;
+import com.example.inventario.infrastructure.adapter.out.persistence.DetallePedidoEntity;
 import com.example.inventario.infrastructure.adapter.out.persistence.EmpleadoEntity;
 import com.example.inventario.infrastructure.adapter.out.persistence.InsumoMenorEntity;
+import com.example.inventario.infrastructure.adapter.out.persistence.PedidoEntity;
+import com.example.inventario.infrastructure.adapter.out.persistence.ProductoEntity;
 import com.example.inventario.infrastructure.adapter.out.persistence.SpringDataCategoriaRepository;
 import com.example.inventario.infrastructure.adapter.out.persistence.SpringDataColorRepository;
 import com.example.inventario.infrastructure.adapter.out.persistence.SpringDataCredencialUsuarioRepository;
@@ -31,9 +34,12 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.math.BigDecimal;
+
 import static org.hamcrest.Matchers.hasSize;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -42,7 +48,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@SpringBootTest(classes = InventarioApplication.class)
+@SpringBootTest(classes = InventarioApplication.class, properties = "inventario.auth.enabled=false")
 @AutoConfigureMockMvc
 class ProductoControllerTest {
 
@@ -99,10 +105,10 @@ class ProductoControllerTest {
 
     @BeforeEach
     void prepararCatalogo() {
+        detallePedidoRepository.deleteAll();
         colorRepository.deleteAll();
         productoTallaRepository.deleteAll();
         tallaRepository.deleteAll();
-        detallePedidoRepository.deleteAll();
         pedidoRepository.deleteAll();
         productoRepository.deleteAll();
         categoriaRepository.deleteAll();
@@ -182,7 +188,7 @@ class ProductoControllerTest {
                   "slug": "%s",
                   "costo": 8.00,
                   "imagenUrl": "https://inventario.test/%s.jpg",
-                  "existencias": 0,
+                  "existencias": 3,
                   "destacado": false
                 }
                 """;
@@ -212,7 +218,7 @@ class ProductoControllerTest {
                                   "slug": "",
                                   "costo": null,
                                   "imagenUrl": "",
-                                  "existencias": 0,
+                                  "existencias": 1,
                                   "destacado": false
                                 }
                                 """.formatted(categoriaId)))
@@ -292,6 +298,100 @@ class ProductoControllerTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("El estado debe ser Activo o Inactivo."));
         assertEquals(1, categoriaRepository.count());
+    }
+
+    @Test
+    void allowsChangingEmployeeRole() throws Exception {
+        int salesRoleId = rolRepository.save(new RolEntity("Ventas")).getId();
+        mockMvc.perform(put("/empleados/{empleadoId}/rol", 25)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"rolId\":" + salesRoleId + "}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.rolId").value(salesRoleId))
+                .andExpect(jsonPath("$.rol").value("Ventas"));
+    }
+
+    @Test
+    void deactivatesEmployeeWithoutDeletingProductsThatReferenceThem() throws Exception {
+        mockMvc.perform(post("/productos")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "categoriaId": %d,
+                                  "empleadoId": 25,
+                                  "nombre": "Producto de empleado",
+                                  "slug": "producto-de-empleado",
+                                  "costo": 12.50,
+                                  "imagenUrl": "https://inventario.test/producto-empleado.jpg",
+                                  "existencias": 2,
+                                  "destacado": false
+                                }
+                                """.formatted(categoriaId)))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(put("/empleados/{empleadoId}/estado", 25))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.estado").value("Inactivo"));
+
+        assertTrue(empleadoRepository.existsById(25));
+        assertEquals("Inactivo", empleadoRepository.findById(25).orElseThrow().getEstado());
+        assertEquals(1, productoRepository.count());
+    }
+
+    @Test
+    void hashesEmployeePasswordWhenSettingItFromTheAdminInterface() throws Exception {
+        String password = "Letras&Simbolos9!";
+        mockMvc.perform(put("/empleados/{empleadoId}/contrasena", 25)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"contrasena\":\"" + password + "\"}"))
+                .andExpect(status().isNoContent());
+
+        String storedHash = empleadoRepository.findById(25).orElseThrow().getContrasenaHash();
+        assertNotEquals(password, storedHash);
+        assertTrue(PasswordHasher.matches(password, storedHash));
+    }
+
+    @Test
+    void rejectsShortEmployeePasswordWithoutUpdatingIt() throws Exception {
+        mockMvc.perform(put("/empleados/{empleadoId}/contrasena", 25)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"contrasena\":\"short\"}"))
+                .andExpect(status().isBadRequest());
+
+        assertEquals(null, empleadoRepository.findById(25).orElseThrow().getContrasenaHash());
+    }
+
+    @Test
+    void reportsGrossSalesAndUnitsByProduct() throws Exception {
+        mockMvc.perform(post("/productos")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "categoriaId": %d,
+                                  "empleadoId": 25,
+                                  "nombre": "Producto rentable",
+                                  "slug": "producto-rentable",
+                                  "costo": 25.00,
+                                  "imagenUrl": "https://inventario.test/producto-rentable.jpg",
+                                  "existencias": 6,
+                                  "destacado": false
+                                }
+                                """.formatted(categoriaId)))
+                .andExpect(status().isCreated());
+
+        int productId = productoRepository.findAll().get(0).getId();
+        PedidoEntity order = pedidoRepository.save(new PedidoEntity(null));
+        detallePedidoRepository.save(new DetallePedidoEntity(
+                order.getId(), productId, 2, new BigDecimal("25.00")
+        ));
+
+        mockMvc.perform(get("/reportes/rentabilidad"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.ventasConProductos").value(1))
+                .andExpect(jsonPath("$.unidadesVendidas").value(2))
+                .andExpect(jsonPath("$.ingresosBrutos").value(50.0))
+                .andExpect(jsonPath("$.productos[0].nombre").value("Producto rentable"))
+                .andExpect(jsonPath("$.productos[0].existenciasActuales").value(4));
     }
 
     @Test
@@ -651,6 +751,34 @@ class ProductoControllerTest {
     }
 
     @Test
+    void productionEmployeeCanClearStockWithoutDeletingTheProduct() throws Exception {
+        mockMvc.perform(post("/productos")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "categoriaId": %d,
+                                  "empleadoId": 25,
+                                  "nombre": "Producto para limpiar",
+                                  "slug": "producto-para-limpiar",
+                                  "costo": 12.50,
+                                  "imagenUrl": "https://inventario.test/limpiar.jpg",
+                                  "existencias": 6,
+                                  "destacado": false
+                                }
+                                """.formatted(categoriaId)))
+                .andExpect(status().isCreated());
+        int productoId = productoRepository.findAll().get(0).getId();
+
+        mockMvc.perform(delete("/productos/{productoId}/existencias", productoId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.productoId").value(productoId))
+                .andExpect(jsonPath("$.existencias").value(0));
+
+        assertEquals(0, productoRepository.findById(productoId).orElseThrow().getExistencias());
+        assertEquals("Producto para limpiar", productoRepository.findById(productoId).orElseThrow().getNombre());
+    }
+
+    @Test
     void addsSaleItemsAndAccumulatesRepeatedProductWithoutReducingInventory() throws Exception {
         mockMvc.perform(post("/productos")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -731,6 +859,62 @@ class ProductoControllerTest {
                         .content("{\"productoId\":1,\"cantidad\":1}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("La venta seleccionada no existe."));
+    }
+
+    @Test
+    void registersPendingSaleUsingExistingOrderDetailsAndReservedStock() throws Exception {
+        mockMvc.perform(post("/productos")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "categoriaId": %d,
+                                  "empleadoId": 25,
+                                  "nombre": "Producto para cerrar venta",
+                                  "slug": "producto-cerrar-venta",
+                                  "costo": 12.50,
+                                  "imagenUrl": "https://inventario.test/cerrar.jpg",
+                                  "existencias": 0,
+                                  "destacado": false
+                                }
+                                """.formatted(categoriaId)))
+                .andExpect(status().isCreated());
+        int productoId = productoRepository.findAll().get(0).getId();
+        mockMvc.perform(post("/produccion/ingresos")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"productoId\":" + productoId + ",\"cantidad\":5}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.existenciasActuales").value(5));
+        mockMvc.perform(post("/ventas").contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isCreated());
+        int pedidoId = pedidoRepository.findAll().get(0).getId();
+        mockMvc.perform(post("/ventas/{pedidoId}/productos", pedidoId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"productoId\":" + productoId + ",\"cantidad\":3}"))
+                .andExpect(status().isCreated());
+
+        assertEquals(2, productoRepository.findById(productoId).orElseThrow().getExistencias());
+        mockMvc.perform(post("/ventas/{pedidoId}/registrar", pedidoId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.estado").value("Pagado"));
+
+        assertEquals(2, productoRepository.findById(productoId).orElseThrow().getExistencias());
+        var detalles = detallePedidoRepository.findAllByPedidoIdOrderByProductoIdAsc(pedidoId);
+        assertEquals(1, detalles.size());
+        assertEquals(3, detalles.get(0).getCantidad());
+        mockMvc.perform(get("/ventas/{pedidoId}/productos", pedidoId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items", hasSize(1)))
+                .andExpect(jsonPath("$.items[0].cantidad").value(3));
+    }
+
+    @Test
+    void doesNotRegisterSaleWithoutProducts() throws Exception {
+        mockMvc.perform(post("/ventas").contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isCreated());
+        int pedidoId = pedidoRepository.findAll().get(0).getId();
+        mockMvc.perform(post("/ventas/{pedidoId}/registrar", pedidoId))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("No se puede registrar una venta sin productos."));
     }
 
     @Test

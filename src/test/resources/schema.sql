@@ -127,3 +127,6 @@ CREATE TABLE DetallePedido (
     FOREIGN KEY (PedidoId) REFERENCES Pedidos (PedidoId),
     FOREIGN KEY (ProductoId) REFERENCES Productos (ProductoId)
 );
+
+CREATE TRIGGER tg_ActualizarStock AFTER INSERT ON DetallePedido
+    FOR EACH ROW CALL "com.example.inventario.infrastructure.adapter.in.web.DetallePedidoStockTrigger";

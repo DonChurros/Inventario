@@ -10,7 +10,9 @@ import com.example.inventario.infrastructure.adapter.out.persistence.DetallePedi
 import com.example.inventario.infrastructure.adapter.out.persistence.EmpleadoEntity;
 import com.example.inventario.infrastructure.adapter.out.persistence.InsumoMenorEntity;
 import com.example.inventario.infrastructure.adapter.out.persistence.PedidoEntity;
+import com.example.inventario.infrastructure.adapter.out.persistence.ProductoEntity;
 import com.example.inventario.infrastructure.adapter.out.persistence.ProductoTallaEntity;
+import com.example.inventario.infrastructure.adapter.out.persistence.RolEntity;
 import com.example.inventario.infrastructure.adapter.out.persistence.SpringDataCategoriaRepository;
 import com.example.inventario.infrastructure.adapter.out.persistence.SpringDataCiudadRepository;
 import com.example.inventario.infrastructure.adapter.out.persistence.SpringDataColorRepository;
@@ -41,6 +43,9 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -204,6 +209,43 @@ public class AdministracionController {
         return ResponseEntity.status(HttpStatus.CREATED).body(toResponse(saved));
     }
 
+    @PutMapping("/empleados/{empleadoId}/rol")
+    public EmpleadoResponse actualizarRolEmpleado(
+            @PathVariable int empleadoId,
+            @RequestBody ActualizarRolEmpleadoRequest request
+    ) {
+        EmpleadoEntity empleado = empleadoRepository.findById(empleadoId)
+                .orElseThrow(() -> new IllegalArgumentException("El empleado seleccionado no existe."));
+        RolEntity rol = rolRepository.findById(request.rolId())
+                .orElseThrow(() -> new IllegalArgumentException("El rol seleccionado no existe."));
+        empleado.setRol(rol);
+        return toResponse(empleadoRepository.save(empleado));
+    }
+
+    @PutMapping("/empleados/{empleadoId}/estado")
+    public EmpleadoResponse retirarEmpleado(@PathVariable int empleadoId) {
+        EmpleadoEntity empleado = empleadoRepository.findById(empleadoId)
+                .orElseThrow(() -> new IllegalArgumentException("El empleado seleccionado no existe."));
+        empleado.desactivar();
+        return toResponse(empleadoRepository.save(empleado));
+    }
+
+    @PutMapping("/empleados/{empleadoId}/contrasena")
+    public ResponseEntity<Void> actualizarContrasenaEmpleado(
+            @PathVariable int empleadoId,
+            @RequestBody ActualizarContrasenaEmpleadoRequest request
+    ) {
+        EmpleadoEntity empleado = empleadoRepository.findById(empleadoId)
+                .orElseThrow(() -> new IllegalArgumentException("El empleado seleccionado no existe."));
+        String contrasena = request.contrasena();
+        if (contrasena == null || contrasena.isBlank() || contrasena.length() < 8) {
+            throw new IllegalArgumentException("La contraseña debe tener al menos 8 caracteres.");
+        }
+        empleado.setContrasenaHash(PasswordHasher.hash(contrasena));
+        empleadoRepository.save(empleado);
+        return ResponseEntity.noContent().build();
+    }
+
     @GetMapping("/usuarios/opciones")
     public List<OpcionCatalogo> listarUsuarios() {
         return usuarioRepository.findAllByOrderByNombreAsc().stream()
@@ -331,7 +373,7 @@ public class AdministracionController {
         if (request.cantidad() <= 0) {
             throw new IllegalArgumentException("La cantidad producida debe ser mayor que cero.");
         }
-        var producto = productoRepository.findById(request.productoId())
+        var producto = productoRepository.findByIdForUpdate(request.productoId())
                 .orElseThrow(() -> new IllegalArgumentException("El producto seleccionado no existe."));
         if (request.cantidad() > Integer.MAX_VALUE - producto.getExistencias()) {
             throw new IllegalArgumentException("La cantidad supera el máximo de existencias permitido.");
@@ -348,6 +390,25 @@ public class AdministracionController {
                 request.cantidad(),
                 saved.getExistencias()
         ));
+    }
+
+    @GetMapping("/productos/{productoId}/variantes")
+    public List<VariantDimension> listarVariantesProducto(@PathVariable int productoId) {
+        validateProductExists(productoId);
+        return getVariantDimensions(productoId);
+    }
+
+    @DeleteMapping("/productos/{productoId}/existencias")
+    @Transactional
+    public ExistenciasProductoResponse eliminarExistenciasProducto(@PathVariable int productoId) {
+        if (productoId <= 0) {
+            throw new IllegalArgumentException("Selecciona un producto válido.");
+        }
+        ProductoEntity producto = productoRepository.findByIdForUpdate(productoId)
+                .orElseThrow(() -> new IllegalArgumentException("El producto seleccionado no existe."));
+        producto.clearExistencias();
+        productoRepository.save(producto);
+        return new ExistenciasProductoResponse(producto.getId(), producto.getExistencias());
     }
 
     @GetMapping("/documentos/opciones")
@@ -383,6 +444,46 @@ public class AdministracionController {
                 .toList();
     }
 
+    @GetMapping("/reportes/rentabilidad")
+    public RentabilidadResponse obtenerRentabilidad() {
+        Map<Integer, ProductoEntity> productos = productoRepository.findAll().stream()
+                .collect(Collectors.toMap(ProductoEntity::getId, producto -> producto));
+        Map<Integer, RentabilidadProducto> productosVendidos = new HashMap<>();
+        Set<Integer> ventasConProductos = new HashSet<>();
+        BigDecimal ingresosBrutos = BigDecimal.ZERO;
+        long unidadesVendidas = 0;
+
+        for (DetallePedidoEntity detalle : detallePedidoRepository.findAll()) {
+            ProductoEntity producto = productos.get(detalle.getProductoId());
+            if (producto == null) {
+                throw new IllegalStateException("No se encontró un producto asociado a una venta.");
+            }
+            BigDecimal subtotal = detalle.getCosto().multiply(BigDecimal.valueOf(detalle.getCantidad()));
+            RentabilidadProducto linea = new RentabilidadProducto(
+                    producto.getId(), producto.getNombre(), detalle.getCantidad(),
+                    subtotal, producto.getExistencias()
+            );
+            productosVendidos.merge(producto.getId(), linea, (actual, nueva) -> new RentabilidadProducto(
+                    actual.productoId(),
+                    actual.nombre(),
+                    actual.unidadesVendidas() + nueva.unidadesVendidas(),
+                    actual.ingresosBrutos().add(nueva.ingresosBrutos()),
+                    actual.existenciasActuales()
+            ));
+            ventasConProductos.add(detalle.getPedidoId());
+            unidadesVendidas += detalle.getCantidad();
+            ingresosBrutos = ingresosBrutos.add(subtotal);
+        }
+
+        List<RentabilidadProducto> resumenProductos = productosVendidos.values().stream()
+                .sorted(Comparator.comparing(RentabilidadProducto::ingresosBrutos).reversed()
+                        .thenComparing(RentabilidadProducto::nombre))
+                .toList();
+        return new RentabilidadResponse(
+                ventasConProductos.size(), unidadesVendidas, ingresosBrutos, resumenProductos
+        );
+    }
+
     @GetMapping("/ventas/{pedidoId}/productos")
     public VentaDetalleResponse listarProductosDeVenta(@PathVariable int pedidoId) {
         PedidoEntity pedido = findPedido(pedidoId);
@@ -396,13 +497,27 @@ public class AdministracionController {
         return new VentaDetalleResponse(pedido.getId(), items, total);
     }
 
+    @PostMapping("/ventas/{pedidoId}/registrar")
+    @Transactional
+    public VentaResponse registrarVenta(@PathVariable int pedidoId) {
+        PedidoEntity pedido = findPedidoForUpdate(pedidoId);
+        ensurePending(pedido);
+        List<DetallePedidoEntity> detalles = detallePedidoRepository
+                .findAllByPedidoIdOrderByProductoIdAsc(pedido.getId());
+        if (detalles.isEmpty()) {
+            throw new IllegalArgumentException("No se puede registrar una venta sin productos.");
+        }
+        pedido.markAsPaid();
+        return toResponse(pedidoRepository.save(pedido));
+    }
+
     @PostMapping("/ventas/{pedidoId}/productos")
     @Transactional
     public ResponseEntity<VentaDetalleResponse> agregarProductoAVenta(
             @PathVariable int pedidoId,
             @RequestBody AgregarProductoVentaRequest request
     ) {
-        PedidoEntity pedido = findPedido(pedidoId);
+        PedidoEntity pedido = findPedidoForUpdate(pedidoId);
         if (request.productoId() <= 0) {
             throw new IllegalArgumentException("Selecciona un producto válido.");
         }
@@ -410,22 +525,29 @@ public class AdministracionController {
             throw new IllegalArgumentException("La cantidad debe ser un entero mayor que cero.");
         }
         ensurePending(pedido);
-        var producto = productoRepository.findById(request.productoId())
+        ProductoEntity producto = productoRepository.findByIdForUpdate(request.productoId())
                 .orElseThrow(() -> new IllegalArgumentException("El producto seleccionado no existe."));
-        DetallePedidoEntity detalle = detallePedidoRepository
-                .findById(new com.example.inventario.infrastructure.adapter.out.persistence.DetallePedidoId(
-                        pedido.getId(), producto.getId()
-                ))
-                .orElseGet(() -> new DetallePedidoEntity(
-                        pedido.getId(), producto.getId(), 0, producto.getCosto()
-                ));
+        DetallePedidoId detalleId = new DetallePedidoId(pedido.getId(), producto.getId());
+        DetallePedidoEntity detalle = detallePedidoRepository.findById(detalleId).orElse(null);
+        int cantidadAnterior = detalle == null ? 0 : detalle.getCantidad();
         try {
-            detalle.addCantidad(request.cantidad());
+            if (detalle == null) {
+                detalle = new DetallePedidoEntity(
+                        pedido.getId(), producto.getId(), request.cantidad(), producto.getCosto()
+                );
+            } else {
+                detalle.addCantidad(request.cantidad());
+            }
         } catch (ArithmeticException exception) {
             throw new IllegalArgumentException("La cantidad acumulada supera el límite permitido.");
         }
-        if (detalle.getCantidad() > producto.getExistencias()) {
+        int incremento = detalle.getCantidad() - cantidadAnterior;
+        if (incremento > producto.getExistencias()) {
             throw new IllegalArgumentException("La cantidad supera las existencias disponibles.");
+        }
+        if (cantidadAnterior > 0) {
+            producto.subtractExistencias(incremento);
+            productoRepository.save(producto);
         }
         detallePedidoRepository.save(detalle);
         return ResponseEntity.status(HttpStatus.CREATED)
@@ -439,21 +561,26 @@ public class AdministracionController {
             @PathVariable int productoId,
             @RequestBody ActualizarCantidadRequest request
     ) {
-        PedidoEntity pedido = findPedido(pedidoId);
+        PedidoEntity pedido = findPedidoForUpdate(pedidoId);
         ensurePending(pedido);
         if (request.cantidad() <= 0) {
             throw new IllegalArgumentException("La cantidad debe ser un entero mayor que cero.");
         }
-        var producto = productoRepository.findById(productoId)
+        ProductoEntity producto = productoRepository.findByIdForUpdate(productoId)
                 .orElseThrow(() -> new IllegalArgumentException("El producto seleccionado no existe."));
-        if (request.cantidad() > producto.getExistencias()) {
+        DetallePedidoEntity detalle = detallePedidoRepository.findById(
+                        new DetallePedidoId(pedido.getId(), producto.getId()))
+                .orElseThrow(() -> new IllegalArgumentException("El producto no está en esta comanda."));
+        int diferencia = request.cantidad() - detalle.getCantidad();
+        if (diferencia > producto.getExistencias()) {
             throw new IllegalArgumentException("La cantidad supera las existencias disponibles.");
         }
-        DetallePedidoEntity detalle = detallePedidoRepository.findById(
-                        new com.example.inventario.infrastructure.adapter.out.persistence.DetallePedidoId(
-                                pedido.getId(), producto.getId()
-                        ))
-                .orElseThrow(() -> new IllegalArgumentException("El producto no está en esta comanda."));
+        if (diferencia > 0) {
+            producto.subtractExistencias(diferencia);
+        } else if (diferencia < 0) {
+            producto.addExistencias(-diferencia);
+        }
+        productoRepository.save(producto);
         detalle.setCantidad(request.cantidad());
         detallePedidoRepository.save(detalle);
         return listarProductosDeVenta(pedido.getId());
@@ -465,13 +592,16 @@ public class AdministracionController {
             @PathVariable int pedidoId,
             @PathVariable int productoId
     ) {
-        PedidoEntity pedido = findPedido(pedidoId);
+        PedidoEntity pedido = findPedidoForUpdate(pedidoId);
         ensurePending(pedido);
         DetallePedidoId detalleId = new DetallePedidoId(pedido.getId(), productoId);
-        if (!detallePedidoRepository.existsById(detalleId)) {
-            throw new IllegalArgumentException("El producto no está en esta comanda.");
-        }
-        detallePedidoRepository.deleteById(detalleId);
+        DetallePedidoEntity detalle = detallePedidoRepository.findById(detalleId)
+                .orElseThrow(() -> new IllegalArgumentException("El producto no está en esta comanda."));
+        ProductoEntity producto = productoRepository.findByIdForUpdate(productoId)
+                .orElseThrow(() -> new IllegalArgumentException("El producto seleccionado no existe."));
+        producto.addExistencias(detalle.getCantidad());
+        productoRepository.save(producto);
+        detallePedidoRepository.delete(detalle);
         return listarProductosDeVenta(pedido.getId());
     }
 
@@ -613,8 +743,43 @@ public class AdministracionController {
         }
     }
 
+    private List<VariantDimension> getVariantDimensions(int productoId) {
+        List<ColorEntity> colores = colorRepository.findAllByProductoIdOrderByNombreAsc(productoId);
+        List<TallaEntity> tallas = productoTallaRepository.findAllByProductoId(productoId).stream()
+                .map(ProductoTallaEntity::getTallaId)
+                .map(tallaId -> tallaRepository.findById(tallaId)
+                        .orElseThrow(() -> new IllegalStateException("No se encontró una talla asignada.")))
+                .sorted(Comparator.comparing(TallaEntity::getSistema)
+                        .thenComparingInt(TallaEntity::getOrdenVisual)
+                        .thenComparing(TallaEntity::getNombreDescriptivo))
+                .toList();
+
+        List<VariantDimension> dimensions = new java.util.ArrayList<>();
+        if (colores.isEmpty() && tallas.isEmpty()) {
+            dimensions.add(new VariantDimension(null, null, null, null));
+        } else if (colores.isEmpty()) {
+            tallas.forEach(talla -> dimensions.add(new VariantDimension(
+                    null, null, talla.getId(), talla.getNombreDescriptivo()
+            )));
+        } else if (tallas.isEmpty()) {
+            colores.forEach(color -> dimensions.add(new VariantDimension(
+                    color.getId(), color.getNombre(), null, null
+            )));
+        } else {
+            colores.forEach(color -> tallas.forEach(talla -> dimensions.add(new VariantDimension(
+                    color.getId(), color.getNombre(), talla.getId(), talla.getNombreDescriptivo()
+            ))));
+        }
+        return dimensions;
+    }
+
     private PedidoEntity findPedido(int pedidoId) {
         return pedidoRepository.findById(pedidoId)
+                .orElseThrow(() -> new IllegalArgumentException("La venta seleccionada no existe."));
+    }
+
+    private PedidoEntity findPedidoForUpdate(int pedidoId) {
+        return pedidoRepository.findByIdForUpdate(pedidoId)
                 .orElseThrow(() -> new IllegalArgumentException("La venta seleccionada no existe."));
     }
 
@@ -705,6 +870,8 @@ public class AdministracionController {
             int id, int documentoId, String nombre, int rolId, String estado, String telefono,
             String correo, String contrasena
     ) {}
+    public record ActualizarRolEmpleadoRequest(int rolId) {}
+    public record ActualizarContrasenaEmpleadoRequest(String contrasena) {}
     public record EmpleadoResponse(
             Integer id, Integer documentoId, String nombre, Integer rolId, String rol, String estado,
             String telefono, String correo
@@ -714,6 +881,15 @@ public class AdministracionController {
             Integer id, Integer usuarioId, java.time.LocalDateTime fechaCreacion, String estado
     ) {}
     public record ProductoVentaOption(Integer id, String nombre, BigDecimal costo, int existencias) {}
+    public record VariantDimension(Integer colorId, String color, Integer tallaId, String talla) {}
+    public record RentabilidadResponse(
+            int ventasConProductos, long unidadesVendidas, BigDecimal ingresosBrutos,
+            List<RentabilidadProducto> productos
+    ) {}
+    public record RentabilidadProducto(
+            Integer productoId, String nombre, long unidadesVendidas,
+            BigDecimal ingresosBrutos, int existenciasActuales
+    ) {}
     public record AgregarProductoVentaRequest(int productoId, int cantidad) {}
     public record ActualizarCantidadRequest(int cantidad) {}
     public record ItemVentaResponse(
@@ -744,6 +920,7 @@ public class AdministracionController {
             Integer productoId, String nombre, String categoria, BigDecimal costo, int cantidadIngresada,
             int existenciasActuales
     ) {}
+    public record ExistenciasProductoResponse(Integer productoId, int existencias) {}
     public record InsumoMenorRequest(
             String nombre, String referencia, String unidadMedida,
             BigDecimal costoUnitario, BigDecimal cantidadDisponible

@@ -28,7 +28,7 @@ const titles = {
   insumos: 'Insumos menores',
 };
 
-function ManagementPanel({ view, onNavigate }) {
+function ManagementPanel({ view, onNavigate, showProductNavigation = true }) {
   const [records, setRecords] = useState([]);
   const [options, setOptions] = useState([]);
   const [cities, setCities] = useState([]);
@@ -46,7 +46,7 @@ function ManagementPanel({ view, onNavigate }) {
   const [notice, setNotice] = useState(null);
 
   if (view === 'ventas') {
-    return <SalesPanel onNavigate={onNavigate} />;
+    return <SalesPanel onNavigate={onNavigate} showProductNavigation={showProductNavigation} />;
   }
 
   async function load() {
@@ -451,7 +451,7 @@ function ManagementPanel({ view, onNavigate }) {
   );
 }
 
-function SalesPanel({ onNavigate }) {
+function SalesPanel({ onNavigate, showProductNavigation }) {
   const [customers, setCustomers] = useState([]);
   const [products, setProducts] = useState([]);
   const [sales, setSales] = useState([]);
@@ -461,7 +461,9 @@ function SalesPanel({ onNavigate }) {
   const [detail, setDetail] = useState({ items: [], total: 0 });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [busyProduct, setBusyProduct] = useState(null);
+  const [registeringSale, setRegisteringSale] = useState(false);
   const [notice, setNotice] = useState(null);
   const [error, setError] = useState('');
   const searchInputRef = useRef(null);
@@ -500,15 +502,20 @@ function SalesPanel({ onNavigate }) {
   useEffect(() => {
     if (!saleId) {
       setDetail({ items: [], total: 0 });
+      setDetailLoading(false);
       return;
     }
     let active = true;
+    setDetailLoading(true);
     window.inventario.obtenerDetalleVenta(Number(saleId))
       .then((saleDetail) => {
         if (active) setDetail(saleDetail);
       })
       .catch((loadError) => {
         if (active) setError(loadError.message || 'No se pudo cargar la comanda.');
+      })
+      .finally(() => {
+        if (active) setDetailLoading(false);
       });
     return () => {
       active = false;
@@ -616,6 +623,28 @@ function SalesPanel({ onNavigate }) {
     }
   }
 
+  async function registerSale() {
+    if (!selectedSale || !detail.items.length) return;
+    const orderId = selectedSale.id;
+    setRegisteringSale(true);
+    setNotice(null);
+    try {
+      await window.inventario.registrarVenta(orderId);
+      setSales((current) => current.filter((sale) => sale.id !== orderId));
+      setSaleId('');
+      setDetail({ items: [], total: 0 });
+      setNotice({
+        type: 'success',
+        text: `Venta #${orderId} registrada como pagada en efectivo. El stock ya fue reservado al agregar el detalle.`,
+      });
+      await loadSales();
+    } catch (registerError) {
+      setNotice({ type: 'error', text: registerError.message || 'No se pudo registrar la venta.' });
+    } finally {
+      setRegisteringSale(false);
+    }
+  }
+
   return (
     <div className="sales-page">
       <header className="page-header">
@@ -624,7 +653,9 @@ function SalesPanel({ onNavigate }) {
           <h1>Crear venta</h1>
         </div>
         <div className="page-actions">
-          <button className="button-secondary" type="button" onClick={() => onNavigate('productos')}>Cancelar</button>
+          {showProductNavigation && (
+            <button className="button-secondary" type="button" onClick={() => onNavigate('productos')}>Cancelar</button>
+          )}
           <button className="button-primary" type="button" onClick={createPendingSale} disabled={saving || loading || Boolean(selectedSale)}>
             {saving ? 'Guardando…' : selectedSale ? 'Venta guardada' : 'Guardar venta'}
           </button>
@@ -776,12 +807,22 @@ function SalesPanel({ onNavigate }) {
             </div>
             <div className="pending-info">
               <span aria-hidden="true">▤</span>
-              <div><strong>Se guardará como pendiente</strong><p>Guardar la comanda no descuenta las existencias del inventario.</p></div>
+              <div><strong>Venta pendiente</strong><p>La base reserva el stock cuando se agrega cada producto al detalle.</p></div>
             </div>
             <button className="save-pending-button" type="button" onClick={createPendingSale} disabled={saving || loading || Boolean(selectedSale)}>
               {saving ? 'Guardando…' : selectedSale ? 'Venta pendiente guardada' : 'Guardar como pendiente'}
               <span aria-hidden="true">›</span>
             </button>
+            {selectedSale && (
+              <button
+                className="register-sale-button"
+                type="button"
+                onClick={() => void registerSale()}
+                disabled={detailLoading || registeringSale || detail.items.length === 0}
+              >
+                {registeringSale ? 'Registrando…' : 'Registrar venta en efectivo'}
+              </button>
+            )}
             <p className="summary-footnote">
               {selectedSale ? `Puedes continuar editando la venta #${selectedSale.id}.` : 'La venta y sus productos se guardarán juntos como pendientes.'}
             </p>
@@ -789,7 +830,7 @@ function SalesPanel({ onNavigate }) {
           {selectedSale && (
             <div className="sale-success-card">
               <strong>Venta creada correctamente</strong>
-              <p>La venta #{selectedSale.id} quedó pendiente y aún no se ha descontado inventario.</p>
+              <p>La venta #{selectedSale.id} sigue pendiente; su stock ya está reservado.</p>
             </div>
           )}
         </aside>

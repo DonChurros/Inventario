@@ -1,3 +1,6 @@
+USE [inventario];
+GO
+
 SET XACT_ABORT ON;
 
 BEGIN TRY
@@ -46,7 +49,7 @@ BEGIN TRY
 
     INSERT INTO dbo.Roles (Rol)
     SELECT V.Rol
-    FROM (VALUES ('Producción'), ('Inventario'), ('Ventas'), ('Jefe'), ('Sin asignar')) AS V(Rol)
+    FROM (VALUES ('Producción'), ('Inventario'), ('Ventas'), ('Administrador'), ('Jefe'), ('Sin asignar')) AS V(Rol)
     WHERE NOT EXISTS (SELECT 1 FROM dbo.Roles AS R WHERE R.Rol = V.Rol);
 
     DECLARE @empleadosSql NVARCHAR(MAX) = N'

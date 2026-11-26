@@ -7,6 +7,8 @@ import InsumosPanel from './InsumosPanel.jsx';
 import CategoriesPanel from './CategoriesPanel.jsx';
 import ColorsPanel from './ColorsPanel.jsx';
 import SizesPanel from './SizesPanel.jsx';
+import ProfitabilityPanel from './ProfitabilityPanel.jsx';
+import PasswordPanel from './PasswordPanel.jsx';
 
 const primaryLinks = [
   ['inicio', 'Inicio', '⌂'],
@@ -14,7 +16,6 @@ const primaryLinks = [
   ['produccion', 'Producción', '◇'],
   ['productos', 'Productos', '☷'],
   ['clientes', 'Clientes', '♧'],
-  ['reportes', 'Reportes', '▤'],
 ];
 
 const settingsLinks = [
@@ -38,7 +39,135 @@ const initialForm = {
   destacado: false,
 };
 
+function roleCategory(role) {
+  const normalized = String(role || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase()
+    .replace(/^empleado de\s+/, '');
+  if (normalized === 'jefe') return 'boss';
+  if (normalized === 'administrador' || normalized === 'administracion') return 'administrator';
+  if (normalized === 'ventas') return 'sales';
+  if (normalized === 'produccion') return 'production';
+  return 'unknown';
+}
+
+function viewsForRole(role) {
+  const category = roleCategory(role);
+  if (category === 'boss') {
+    return new Set([...primaryLinks.map(([view]) => view), 'movimientos', 'configuracion', 'reportes', 'password']);
+  }
+  if (category === 'administrator') {
+    return new Set([...primaryLinks.map(([view]) => view), 'movimientos', 'configuracion', 'password']);
+  }
+  if (category === 'sales') return new Set(['ventas', 'password']);
+  if (category === 'production') return new Set(['produccion', 'productos', 'password']);
+  return new Set();
+}
+
+function initialViewForRole(role) {
+  const category = roleCategory(role);
+  if (category === 'sales') return 'ventas';
+  if (category === 'production') return 'produccion';
+  return 'inicio';
+}
+
 function App() {
+  const [employee, setEmployee] = useState(null);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState('');
+
+  async function login(empleadoId, contrasena) {
+    setAuthLoading(true);
+    setAuthError('');
+    try {
+      setEmployee(await window.inventario.iniciarSesion({ empleadoId: Number(empleadoId), contrasena }));
+    } catch (error) {
+      setAuthError(error.message || 'No se pudo iniciar sesión. Revisa tus datos e inténtalo nuevamente.');
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  async function logout() {
+    try {
+      await window.inventario.cerrarSesion();
+    } finally {
+      setEmployee(null);
+    }
+  }
+
+  if (!employee) {
+    return (
+      <LoginPanel
+        onLogin={login}
+        loading={authLoading}
+        error={authError}
+      />
+    );
+  }
+  return <AdministrationApp employee={employee} onLogout={logout} />;
+}
+
+function LoginPanel({ onLogin, loading, error }) {
+  const [empleadoId, setEmpleadoId] = useState('');
+  const [contrasena, setContrasena] = useState('');
+
+  function submit(event) {
+    event.preventDefault();
+    onLogin(empleadoId, contrasena);
+  }
+
+  return (
+    <main className="login-page">
+      <section className="login-card" aria-labelledby="login-title">
+        <div className="login-brand-mark" aria-hidden="true">♡</div>
+        <span className="eyebrow">ERIK’S CREACIONES</span>
+        <h1 id="login-title">Acceso al sistema</h1>
+        <p>Ingresa con tu identificación de empleado y contraseña.</p>
+        <form className="login-form" onSubmit={submit}>
+          <label className="field">
+            <span>ID de empleado</span>
+            <input
+              type="number"
+              min="1"
+              step="1"
+              autoComplete="username"
+              value={empleadoId}
+              onChange={(event) => setEmpleadoId(event.target.value)}
+              required
+            />
+          </label>
+          <label className="field">
+            <span>Contraseña</span>
+            <input
+              type="password"
+              autoComplete="current-password"
+              value={contrasena}
+              onChange={(event) => setContrasena(event.target.value)}
+              required
+            />
+          </label>
+          {error && <div className="notice error" role="alert">{error}</div>}
+          <button type="submit" disabled={loading || !empleadoId || !contrasena}>
+            {loading ? 'Verificando…' : 'Iniciar sesión'}
+          </button>
+        </form>
+        <small className="login-security-note">El acceso y las opciones disponibles dependen de tu rol.</small>
+      </section>
+    </main>
+  );
+}
+
+function AdministrationApp({ employee, onLogout }) {
+  const role = roleCategory(employee.rol);
+  const allowedViews = viewsForRole(employee.rol);
+  const isManager = role === 'administrator' || role === 'boss';
+  const primaryNavigation = [
+    ...primaryLinks.filter(([view]) => allowedViews.has(view)),
+    ...(role === 'boss' ? [['reportes', 'Rentabilidad', '▤']] : []),
+  ];
   const [form, setForm] = useState(initialForm);
   const [options, setOptions] = useState({ categorias: [], empleados: [] });
   const [products, setProducts] = useState([]);
@@ -47,10 +176,21 @@ function App() {
   const [productsError, setProductsError] = useState('');
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState(null);
-  const [activeView, setActiveView] = useState('inicio');
+  const [activeView, setActiveView] = useState(() => initialViewForRole(employee.rol));
   const [settingsView, setSettingsView] = useState('empleados');
 
+  function navigateTo(view) {
+    if (allowedViews.has(view)) {
+      setActiveView(view);
+    }
+  }
+
   useEffect(() => {
+    if (role === 'sales') {
+      setLoadingOptions(false);
+      setLoadingProducts(false);
+      return undefined;
+    }
     if (!window.inventario) {
       setLoadingOptions(false);
       setLoadingProducts(false);
@@ -85,7 +225,7 @@ function App() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [role]);
 
   async function refreshProducts() {
     setLoadingProducts(true);
@@ -175,18 +315,18 @@ function App() {
   return (
     <main className="app-shell">
       <aside className="app-sidebar">
-        <a className="brand" href="#" onClick={(event) => { event.preventDefault(); setActiveView('inicio'); }} aria-label="Erik's Creaciones, inicio">
+        <a className="brand" href="#" onClick={(event) => { event.preventDefault(); navigateTo('inicio'); }} aria-label="Erik's Creaciones, inicio">
           <span className="brand-mark" aria-hidden="true">♡</span>
           <span className="brand-name">Erik’s<small>Creaciones</small></span>
         </a>
         <nav className="sidebar-nav" aria-label="Navegación principal">
           <span className="sidebar-group-label">PRINCIPAL</span>
-          {primaryLinks.map(([view, label, icon]) => (
+          {primaryNavigation.map(([view, label, icon]) => (
             <button
               key={view}
               className={`sidebar-link ${activeView === view ? 'active' : ''}`}
               type="button"
-              onClick={() => setActiveView(view)}
+              onClick={() => navigateTo(view)}
               aria-current={activeView === view ? 'page' : undefined}
             >
               <span className="sidebar-icon" aria-hidden="true">{icon}</span>
@@ -194,30 +334,44 @@ function App() {
               {activeView === view && <i aria-hidden="true" />}
             </button>
           ))}
-          <span className="sidebar-group-label management-label">GESTIÓN</span>
-          <button className={`sidebar-link ${activeView === 'movimientos' ? 'active' : ''}`} type="button" onClick={() => setActiveView('movimientos')}>
-            <span className="sidebar-icon" aria-hidden="true">◷</span><span>Movimientos</span>
+          <button
+            className={`sidebar-link ${activeView === 'password' ? 'active' : ''}`}
+            type="button"
+            onClick={() => navigateTo('password')}
+            aria-current={activeView === 'password' ? 'page' : undefined}
+          >
+            <span className="sidebar-icon" aria-hidden="true">⌑</span>
+            <span>Cambiar contraseña</span>
+            {activeView === 'password' && <i aria-hidden="true" />}
           </button>
-          <button className={`sidebar-link ${activeView === 'configuracion' ? 'active' : ''}`} type="button" onClick={() => setActiveView('configuracion')}>
-            <span className="sidebar-icon" aria-hidden="true">⚙</span><span>Configuración</span>
-          </button>
-          {activeView === 'configuracion' && (
-            <div className="sidebar-subnav" aria-label="Opciones de configuración">
-              {settingsLinks.map(([view, label]) => (
-                <button
-                  key={view}
-                  type="button"
-                  className={settingsView === view ? 'sidebar-sublink active' : 'sidebar-sublink'}
-                  onClick={() => setSettingsView(view)}
-                >{label}</button>
-              ))}
-            </div>
+          {isManager && (
+            <>
+              <span className="sidebar-group-label management-label">GESTIÓN</span>
+              <button className={`sidebar-link ${activeView === 'movimientos' ? 'active' : ''}`} type="button" onClick={() => navigateTo('movimientos')}>
+                <span className="sidebar-icon" aria-hidden="true">◷</span><span>Movimientos</span>
+              </button>
+              <button className={`sidebar-link ${activeView === 'configuracion' ? 'active' : ''}`} type="button" onClick={() => navigateTo('configuracion')}>
+                <span className="sidebar-icon" aria-hidden="true">⚙</span><span>Configuración</span>
+              </button>
+              {activeView === 'configuracion' && (
+                <div className="sidebar-subnav" aria-label="Opciones de configuración">
+                  {settingsLinks.map(([view, label]) => (
+                    <button
+                      key={view}
+                      type="button"
+                      className={settingsView === view ? 'sidebar-sublink active' : 'sidebar-sublink'}
+                      onClick={() => setSettingsView(view)}
+                    >{label}</button>
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </nav>
         <div className="sidebar-profile">
-          <span className="profile-avatar">EC</span>
-          <span><strong>Erik’s Creaciones</strong><small>Administración</small></span>
-          <span className="profile-chevron">›</span>
+          <span className="profile-avatar">{employee.nombre.slice(0, 2).toUpperCase()}</span>
+          <span><strong>{employee.nombre}</strong><small>#{employee.id} · {employee.rol}</small></span>
+          <button className="profile-logout" type="button" onClick={onLogout} aria-label="Cerrar sesión" title="Cerrar sesión">↪</button>
         </div>
       </aside>
 
@@ -225,14 +379,15 @@ function App() {
         <header className="topbar">
           <div className="topbar-context">
             <span>ERIK’S CREACIONES</span>
-            <strong>{activeView === 'ventas' ? 'Administración de ventas' : activeView === 'produccion' ? 'Ingreso de producción' : activeView === 'productos' ? 'Inventario' : activeView === 'clientes' ? 'Clientes y accesos' : activeView === 'configuracion' ? 'Configuración' : activeView === 'reportes' ? 'Reportes' : activeView === 'movimientos' ? 'Movimientos' : 'Panel de administración'}</strong>
+            <strong>{activeView === 'password' ? 'Cambiar contraseña' : activeView === 'ventas' ? 'Administración de ventas' : activeView === 'produccion' ? 'Ingreso de producción' : activeView === 'productos' ? 'Inventario' : activeView === 'clientes' ? 'Clientes y accesos' : activeView === 'configuracion' ? 'Configuración' : activeView === 'reportes' ? 'Rentabilidad y ventas' : activeView === 'movimientos' ? 'Movimientos' : 'Panel de administración'}</strong>
           </div>
           <div className="topbar-status"><span className="status-dot" /><span>Gestión de inventario</span></div>
         </header>
 
       <div className="main-content">
-      {activeView === 'inicio' && <HomePanel onNavigate={setActiveView} />}
-      {activeView === 'ventas' && <ManagementPanel view="ventas" onNavigate={setActiveView} />}
+      {activeView === 'inicio' && isManager && <HomePanel onNavigate={navigateTo} />}
+      {activeView === 'ventas' && <ManagementPanel view="ventas" onNavigate={navigateTo} showProductNavigation={role !== 'sales'} />}
+      {activeView === 'password' && <PasswordPanel />}
       {activeView === 'clientes' && <CustomersPanel />}
       {activeView === 'configuracion' && settingsView === 'empleados' && <EmployeesPanel />}
       {activeView === 'configuracion' && settingsView === 'usuarios' && <CustomersPanel />}
@@ -240,24 +395,17 @@ function App() {
       {activeView === 'configuracion' && settingsView === 'categorias' && <CategoriesPanel />}
       {activeView === 'configuracion' && settingsView === 'colores' && <ColorsPanel />}
       {activeView === 'configuracion' && settingsView === 'tallas' && <SizesPanel />}
-      {activeView === 'configuracion' && !['empleados', 'usuarios', 'insumos', 'categorias', 'colores', 'tallas'].includes(settingsView) && <ManagementPanel view={settingsView} />}
+      {activeView === 'configuracion' && isManager && !['empleados', 'usuarios', 'insumos', 'categorias', 'colores', 'tallas'].includes(settingsView) && <ManagementPanel view={settingsView} />}
       {activeView === 'produccion' && <ProductionPanel />}
       {activeView === 'movimientos' && (
         <InformationPanel
           title="Movimientos"
           description="Las ventas pendientes aparecen en el módulo Ventas. La salida de inventario se mantiene sin cambios hasta confirmar la venta."
           action="Ir a ventas"
-          onAction={() => setActiveView('ventas')}
+          onAction={() => navigateTo('ventas')}
         />
       )}
-      {activeView === 'reportes' && (
-        <InformationPanel
-          title="Reportes"
-          description="Los reportes estarán disponibles cuando se definan los indicadores y el esquema de cierre de ventas."
-          action="Ver inventario"
-          onAction={() => setActiveView('productos')}
-        />
-      )}
+      {activeView === 'reportes' && role === 'boss' && <ProfitabilityPanel />}
       {activeView === 'productos' && <>
       <section className="workspace">
         <aside className="side-note">

@@ -56,4 +56,8 @@ public class PedidoEntity {
     public String getEstado() {
         return estado;
     }
+
+    public void markAsPaid() {
+        this.estado = "Pagado";
+    }
 }

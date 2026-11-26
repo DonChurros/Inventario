@@ -95,6 +95,10 @@ public class EmpleadoEntity {
         return rol.getId();
     }
 
+    public void setRol(RolEntity rol) {
+        this.rol = rol;
+    }
+
     public String getTelefono() {
         return telefono;
     }
@@ -107,7 +111,15 @@ public class EmpleadoEntity {
         return contrasenaHash;
     }
 
+    public void setContrasenaHash(String contrasenaHash) {
+        this.contrasenaHash = contrasenaHash;
+    }
+
     public String getEstado() {
         return estado;
+    }
+
+    public void desactivar() {
+        this.estado = "Inactivo";
     }
 }

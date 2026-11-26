@@ -96,4 +96,15 @@ public class ProductoEntity {
     public void addExistencias(int cantidad) {
         this.existencias = Math.addExact(this.existencias, cantidad);
     }
+
+    public void clearExistencias() {
+        this.existencias = 0;
+    }
+
+    public void subtractExistencias(int cantidad) {
+        if (cantidad <= 0 || cantidad > this.existencias) {
+            throw new IllegalArgumentException("La cantidad supera las existencias del producto.");
+        }
+        this.existencias -= cantidad;
+    }
 }

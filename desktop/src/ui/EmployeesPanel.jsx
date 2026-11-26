@@ -16,6 +16,11 @@ function EmployeesPanel() {
   const [employees, setEmployees] = useState([]);
   const [documents, setDocuments] = useState([]);
   const [roles, setRoles] = useState([]);
+  const [roleDrafts, setRoleDrafts] = useState({});
+  const [passwordDrafts, setPasswordDrafts] = useState({});
+  const [updatingEmployeeId, setUpdatingEmployeeId] = useState(null);
+  const [updatingPasswordEmployeeId, setUpdatingPasswordEmployeeId] = useState(null);
+  const [deactivatingEmployeeId, setDeactivatingEmployeeId] = useState(null);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -32,6 +37,10 @@ function EmployeesPanel() {
         window.inventario.obtenerRegistros('roles'),
       ]);
       setEmployees(employeeList);
+      setRoleDrafts(Object.fromEntries(employeeList.map((employee) => [
+        employee.id,
+        String(employee.rolId),
+      ])));
       setDocuments(documentOptions);
       setRoles(roleOptions);
     } catch (loadError) {
@@ -59,6 +68,65 @@ function EmployeesPanel() {
     const { name, value } = event.target;
     setForm((current) => ({ ...current, [name]: value }));
     setNotice(null);
+  }
+
+  async function updateEmployeeRole(employee) {
+    const rolId = Number(roleDrafts[employee.id]);
+    if (!rolId || rolId === employee.rolId) return;
+    setUpdatingEmployeeId(employee.id);
+    setNotice(null);
+    try {
+      const updated = await window.inventario.actualizarRolEmpleado(employee.id, rolId);
+      setEmployees((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+      setNotice({ type: 'success', text: `Rol actualizado para ${updated.nombre}.` });
+    } catch (updateError) {
+      setRoleDrafts((current) => ({ ...current, [employee.id]: String(employee.rolId) }));
+      setNotice({ type: 'error', text: updateError.message || `No se pudo actualizar el rol de ${employee.nombre}.` });
+    } finally {
+      setUpdatingEmployeeId(null);
+    }
+  }
+
+  async function updateEmployeePassword(employee) {
+    const contrasena = passwordDrafts[employee.id] || '';
+    if (contrasena.length < 8) {
+      setNotice({ type: 'error', text: 'La contraseña debe tener al menos 8 caracteres.' });
+      return;
+    }
+    setUpdatingPasswordEmployeeId(employee.id);
+    setNotice(null);
+    try {
+      await window.inventario.actualizarContrasenaEmpleado(employee.id, contrasena);
+      setPasswordDrafts((current) => ({ ...current, [employee.id]: '' }));
+      setNotice({ type: 'success', text: `Contraseña actualizada para ${employee.nombre}.` });
+    } catch (updateError) {
+      setNotice({ type: 'error', text: updateError.message || `No se pudo actualizar la contraseña de ${employee.nombre}.` });
+    } finally {
+      setUpdatingPasswordEmployeeId(null);
+    }
+  }
+
+  async function deactivateEmployee(employee) {
+    if (employee.estado === 'Inactivo') return;
+    const confirmed = window.confirm(
+      `¿Dar de baja a ${employee.nombre}? Se conservará su historial, pero ya no podrá iniciar sesión.`,
+    );
+    if (!confirmed) return;
+
+    setDeactivatingEmployeeId(employee.id);
+    setNotice(null);
+    try {
+      const updated = await window.inventario.retirarEmpleado(employee.id);
+      setEmployees((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+      setNotice({ type: 'success', text: `${updated.nombre} fue dado de baja; su historial se conservó.` });
+    } catch (deactivationError) {
+      setNotice({
+        type: 'error',
+        text: deactivationError.message || `No se pudo dar de baja a ${employee.nombre}.`,
+      });
+    } finally {
+      setDeactivatingEmployeeId(null);
+    }
   }
 
   async function submit(event) {
@@ -193,20 +261,73 @@ function EmployeesPanel() {
           </div>
           <div className="employee-table-scroll">
             <table className="employee-table">
-              <thead><tr><th>Empleado</th><th>Rol</th><th>Estado</th><th>ID</th></tr></thead>
+              <thead><tr><th>Empleado</th><th>Rol / asignación</th><th>Estado</th><th>ID</th><th>Cambiar contraseña</th><th>Acción</th></tr></thead>
               <tbody>
                 {filteredEmployees.map((employee) => (
                   <tr key={employee.id}>
                     <td><span className="employee-avatar">{employee.nombre.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase()}</span>
                       <span className="employee-identity"><strong>{employee.nombre}</strong><small>{employee.correo}</small></span>
                     </td>
-                    <td><span className="employee-role">{employee.rol}</span></td>
+                    <td>
+                      <div className="employee-role-controls">
+                        <select
+                          className="employee-role-select"
+                          aria-label={`Rol de ${employee.nombre}`}
+                          value={roleDrafts[employee.id] || ''}
+                          onChange={(event) => setRoleDrafts((current) => ({ ...current, [employee.id]: event.target.value }))}
+                        >
+                          {roles.map((role) => <option key={role.id} value={role.id}>{role.nombre}</option>)}
+                        </select>
+                        <button
+                          className="employee-role-save"
+                          type="button"
+                          onClick={() => void updateEmployeeRole(employee)}
+                          disabled={updatingEmployeeId === employee.id || Number(roleDrafts[employee.id]) === employee.rolId}
+                        >
+                          {updatingEmployeeId === employee.id ? '…' : 'Guardar'}
+                        </button>
+                      </div>
+                    </td>
                     <td><span className={`employee-status ${employee.estado.toLowerCase()}`}><i />{employee.estado}</span></td>
                     <td className="employee-id">{employee.id}</td>
+                    <td>
+                      <div className="employee-password-controls">
+                        <input
+                          className="employee-password-input"
+                          type="password"
+                          minLength="8"
+                          autoComplete="new-password"
+                          aria-label={`Nueva contraseña para ${employee.nombre}`}
+                          placeholder="Mín. 8 caracteres"
+                          value={passwordDrafts[employee.id] || ''}
+                          onChange={(event) => setPasswordDrafts((current) => ({ ...current, [employee.id]: event.target.value }))}
+                        />
+                        <button
+                          className="employee-role-save"
+                          type="button"
+                          onClick={() => void updateEmployeePassword(employee)}
+                          disabled={updatingPasswordEmployeeId === employee.id || (passwordDrafts[employee.id] || '').length < 8}
+                        >
+                          {updatingPasswordEmployeeId === employee.id ? '…' : 'Actualizar'}
+                        </button>
+                      </div>
+                    </td>
+                    <td>
+                      {employee.estado === 'Activo' && (
+                        <button
+                          className="employee-deactivate"
+                          type="button"
+                          onClick={() => void deactivateEmployee(employee)}
+                          disabled={deactivatingEmployeeId === employee.id}
+                        >
+                          {deactivatingEmployeeId === employee.id ? 'Procesando…' : 'Dar de baja'}
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 ))}
                 {!loading && filteredEmployees.length === 0 && (
-                  <tr><td className="employee-empty" colSpan="4">{employees.length ? 'No hay empleados que coincidan con la búsqueda.' : 'Aún no hay empleados registrados.'}</td></tr>
+                  <tr><td className="employee-empty" colSpan="6">{employees.length ? 'No hay empleados que coincidan con la búsqueda.' : 'Aún no hay empleados registrados.'}</td></tr>
                 )}
               </tbody>
             </table>

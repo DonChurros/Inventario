@@ -11,9 +11,9 @@ function ProductionPanel() {
   const [categories, setCategories] = useState([]);
   const [productId, setProductId] = useState('');
   const [quantity, setQuantity] = useState('1');
-  const [activity, setActivity] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [clearingProductId, setClearingProductId] = useState(null);
   const [notice, setNotice] = useState(null);
 
   async function load() {
@@ -68,7 +68,6 @@ function ProductionPanel() {
           ? { ...product, existencias: ingreso.existenciasActuales }
           : product
       )));
-      setActivity((current) => [{ ...ingreso, fecha: new Date().toLocaleString('es-CO') }, ...current]);
       setQuantity('1');
       setNotice({
         type: 'success',
@@ -78,6 +77,32 @@ function ProductionPanel() {
       setNotice({ type: 'error', text: error.message || 'No se pudo registrar el ingreso.' });
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function clearStock(product) {
+    if (product.existencias <= 0 || !window.confirm(
+      `¿Eliminar las ${product.existencias} unidades de ${product.nombre} y dejar sus existencias en cero?`,
+    )) {
+      return;
+    }
+    setNotice(null);
+    setClearingProductId(product.id);
+    try {
+      const result = await window.inventario.eliminarExistenciasProducto(product.id);
+      setProducts((current) => current.map((product) => (
+        product.id === result.productoId
+          ? { ...product, existencias: result.existencias }
+          : product
+      )));
+      setNotice({
+        type: 'success',
+        text: `Existencias de ${product.nombre} eliminadas. El producto sigue en el catálogo.`,
+      });
+    } catch (error) {
+      setNotice({ type: 'error', text: error.message || 'No se pudieron eliminar las existencias.' });
+    } finally {
+      setClearingProductId(null);
     }
   }
 
@@ -128,10 +153,15 @@ function ProductionPanel() {
               />
             </label>
             {selectedProduct && (
-              <p className="production-stock">Existencias actuales: <strong>{selectedProduct.existencias}</strong></p>
+              <p className="production-stock">
+                Existencias actuales: <strong>{selectedProduct.existencias}</strong>
+              </p>
             )}
             {notice && <div className={`notice ${notice.type}`} role="status">{notice.text}</div>}
-            <button type="submit" disabled={saving || loading || !products.length}>
+            <button
+              type="submit"
+              disabled={saving || loading || clearingProductId !== null || !selectedProduct}
+            >
               {saving ? 'Registrando…' : 'Registrar ingreso'}
             </button>
           </form>
@@ -148,25 +178,20 @@ function ProductionPanel() {
                 <div className="management-record" key={product.id}>
                   <strong>#{product.id} · {product.nombre}</strong>
                   <span>{categories.find((item) => item.id === product.categoriaId)?.nombre || 'Categoría'} · {product.existencias} unidades · {money.format(Number(product.costo))}</span>
+                  {product.existencias > 0 ? (
+                    <button
+                      className="production-stock-action"
+                      type="button"
+                      onClick={() => void clearStock(product)}
+                      disabled={saving || clearingProductId !== null}
+                    >
+                      {clearingProductId === product.id ? 'Eliminando…' : 'Eliminar stock'}
+                    </button>
+                  ) : <span>Sin existencias</span>}
                 </div>
               ))}
             </div>
           )}
-        </section>
-
-        <section className="management-card production-activity">
-          <span className="eyebrow">ACTIVIDAD LOCAL</span>
-          <h2>Ingresos de esta sesión</h2>
-          <p className="schema-warning">El esquema actual no guarda un historial de producción. Esta lista es temporal y se pierde al salir de la pantalla.</p>
-          <div className="management-list">
-            {activity.length === 0 && <p>Aún no registras ingresos en esta sesión.</p>}
-            {activity.map((entry, index) => (
-              <div className="management-record" key={`${entry.productoId}-${index}`}>
-                <strong>{entry.nombre} · +{entry.cantidadIngresada}</strong>
-                <span>{entry.fecha} · existencias: {entry.existenciasActuales}</span>
-              </div>
-            ))}
-          </div>
         </section>
       </div>
     </section>
